@@ -1,0 +1,113 @@
+摘要： 
+说明:
+由于之前使用CDH5.4.8,其Hive版本为1.1.0,其业务的脚本和jar也在此版本开发，所以有很多依赖性，兼容性等等。
+然后当我们计划将CDH5.4.8 Job迁移至AliYun EMR平台上，发现hive-1.1.0-cdh5.4.8与该平台的Apache Hadoop2.7.2
+
+说明:
+由于之前使用CDH5.4.8,其Hive版本为1.1.0,其业务的脚本和jar也在此版本开发，所以有很多依赖性，兼容性等等。
+然后当我们计划将CDH5.4.8 Job迁移至AliYun EMR平台上，发现hive-1.1.0-cdh5.4.8与该平台的Apache Hadoop2.7.2 严重不能兼容，
+于是花了很长时间在做这件事--根据业务脚本和jar包定制我们的hive-1.2.1-emr版本。
+
+
+其中我们尝试了以下 
+hive-1.1.0-apache,
+hive-2.0.0-apache,
+hive-1.1.0-cdh5.8.0,
+hive-1.1.0-cdh5.4.8等版本与Apache hadoop2.7.2与脚本内容兼容错误甚多，且尝试无法解决，于是选择hive-1.x.x系列的最新版。
+
+
+
+1.Download hive-1.2.1 source code
+[root@sht-sgmhadoopnn-01 hadoop]# wget https://archive.apache.org/dist/hive/hive-1.2.1/apache-hive-1.2.1-src.tar.gz
+[root@sht-sgmhadoopnn-01 hadoop]# tar -xzvf apache-hive-1.2.1-src.tar.gz
+[root@sht-sgmhadoopnn-01 hadoop]# cd apache-hive-1.2.1-src
+
+2.Download patch
+Bug1:ADD JAR failing with URL schemes other than file/ivy/hdfs
+https://issues.apache.org/jira/browse/HIVE-11920
+
+[root@sht-sgmhadoopnn-01 apache-hive-1.2.1-src]# wget https://issues.apache.org/jira/secure/attachment/12761724/HIVE-11920.1.patch
+[root@sht-sgmhadoopnn-01 apache-hive-1.2.1-src]# cat HIVE-11920.1.patch
+diff --git a/ql/src/java/org/apache/hadoop/hive/ql/session/SessionState.java b/ql/src/java/org/apache/hadoop/hive/ql/session/SessionState.java
+index 9f738df..eece93e 100644
+--- a/ql/src/java/org/apache/hadoop/hive/ql/session/SessionState.java
++++ b/ql/src/java/org/apache/hadoop/hive/ql/session/SessionState.java
+..................
+..................
+
+
+3.Patch HIVE-11920.1.patch
+Format: patch -p0|-p1 < xxxx.patch
+如果使用参数-p0，就表示从当前目录，找一个叫作b的目录，在它下面找一个叫ql的目录，再在它下面找一个叫src的目录。
+如果使用参数-p1, 就表示忽略第一层，从当前目录找一个叫ql的目录，在它下面找一个叫src的目录。这样会忽略掉补丁头提到的b目录。
+
+[root@sht-sgmhadoopnn-01 apache-hive-1.2.1-src]# patch -p1 < HIVE-11920.1.patch
+patching file ql/src/java/org/apache/hadoop/hive/ql/session/SessionState.java
+patching file ql/src/test/queries/clientpositive/add_jar_pfile.q
+patching file ql/src/test/results/clientpositive/add_jar_pfile.q.out
+
+4.Download maven tool and configure parameter
+[root@sht-sgmhadoopnn-01 apache-hive-1.2.1-src]# export MAVEN_HOME=/hadoop/maven
+[root@sht-sgmhadoopnn-01 apache-hive-1.2.1-src]# export PATH=$MAVEN_HOME/bin:$PATH
+
+5.Compile hive-1.2.1
+[root@sht-sgmhadoopnn-01 apache-hive-1.2.1-src]# mvn clean install -Phadoop-2,dist -DskipTests -Dhadoop-23.version=2.7.2 -Dhive.version=1.2.1
+[root@sht-sgmhadoopnn-01 apache-hive-1.2.1-src]# ll ./packaging/target/apache-hive-1.2.1-bin.tar.gz
+-rw-r--r-- 1 root root 94035955 Oct 4 16:29 ./packaging/target/apache-hive-1.2.1-bin.tar.gz
+
+6.Upload mysql-connector-java-5.1.36-bin.jar 
+[root@sht-sgmhadoopnn-01 apache-hive-1.2.1-src]# cp ./packaging/target/apache-hive-1.2.1-bin.tar.gz ../
+[root@sht-sgmhadoopnn-01 apache-hive-1.2.1-src]# cd ../
+[root@sht-sgmhadoopnn-01 hadoop]# tar xzvf apache-hive-1.2.1-bin.tar.gz
+[root@sht-sgmhadoopnn-01 hadoop]# cd ./apache-hive-1.2.1-bin/lib
+[root@sht-sgmhadoopnn-01 lib]# rz
+rz waiting to receive.
+Starting zmodem transfer. Press Ctrl+C to cancel.
+Transferring mysql-connector-java-5.1.36-bin.jar...
+100% 949 KB 949 KB/sec 00:00:01 0 Errors
+
+
+7.Modify hive-site.xml
+[root@sht-sgmhadoopnn-01 lib]# cd ../conf
+[root@sht-sgmhadoopnn-01 lib]# vi hive-site.xml
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+
+<configuration>
+     <property>
+	  <name>hive.metastore.warehouse.dir</name>
+	  <value>/user/hive/warehouse</value>
+      </property>
+
+    <property>
+	  <name>hive.metastore.local</name>
+	  <value>true</value>
+    </property>
+
+    <property>
+        <name>javax.jdo.option.ConnectionURL</name>
+        <value>jdbc:mysql://localhost:3306/hive?createDatabaseIfNotExist=true</value>
+        <description>JDBC connect string for a JDBC metastore</description>
+    </property>
+    <property>
+        <name>javax.jdo.option.ConnectionDriverName</name>
+        <value>com.mysql.jdbc.Driver</value>
+        <description>Driver class name for a JDBC metastore</description>
+    </property>
+
+    <property>
+        <name>javax.jdo.option.ConnectionUserName</name>
+        <value>root</value>
+        <description>username to use against metastore database</description>
+    </property>
+    <property>
+        <name>javax.jdo.option.ConnectionPassword</name>
+        <value>EMRroot1234</value>
+        <description>password to use against metastore database</description>
+    </property>
+</configuration>
+
+
+8.Rerun tar hive files
+[root@sht-sgmhadoopnn-01 conf]# cd ../
+[root@sht-sgmhadoopnn-01 apache-hive-1.2.1-bin]# tar -zcvf hive-1.2.1-emr.tar.gz *
